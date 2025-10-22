@@ -1,308 +1,351 @@
 'use client'
+
 import { useState, useEffect } from 'react'
 import LoadMoreButton from './LoadMoreButton'
 
-export default function ImageSearch({ onSearch }) {
-  const [query, setQuery] = useState('')
-  const [isLoading, setIsLoading] = useState(false)
-  const [filterInfo, setFilterInfo] = useState('')
-  const [lastError, setLastError] = useState('')
-  
-  // Estados para imágenes y paginación
-  const [images, setImages] = useState([])
-  const [currentPage, setCurrentPage] = useState(1)
-  const [hasMore, setHasMore] = useState(false)
-  const [totalResults, setTotalResults] = useState(0)
-  const [currentSearchTerm, setCurrentSearchTerm] = useState('')
-  const [showResults, setShowResults] = useState(false)
+// Palabras que activan el bloqueo si se usan solas
+const BLOCK_WORDS = ['black', 'poor'];
 
-  const searchSuggestions = [
-    'nature', 'mountains', 'ocean', 'city', 'forest', 
-    'animals', 'flowers', 'sky', 'beach', 'architecture'
-  ]
-
-  useEffect(() => {
-    const handleSearchFromHistory = (event) => {
-      const { term } = event.detail
-      setQuery(term)
-      performSearch(term, 1)
-    }
-
-    window.addEventListener('searchFromHistory', handleSearchFromHistory)
-    
-    return () => {
-      window.removeEventListener('searchFromHistory', handleSearchFromHistory)
-    }
-  }, [])
-
-  const performSearch = async (searchTerm, page = 1, isLoadMore = false) => {
-    if (!searchTerm.trim()) {
-      setLastError('Por favor, escribe algo para buscar')
-      return
-    }
-
-    if (!isLoadMore) {
-      setIsLoading(true)
-      setImages([])
-      setCurrentPage(1)
-      setCurrentSearchTerm(searchTerm)
-      setShowResults(false)
-    } else {
-      setIsLoading(true)
-    }
-
-    setLastError('')
-    setFilterInfo('')
+// ✅ Guarda las búsquedas en MongoDB (Mantener esta función como está)
+const saveSearchRecord = async (query, results) => {
+    // ... (Tu función saveSearchRecord original) ...
+    const searchRecord = {
+        query: query,
+        image_count: results.length,
+        results: results.map(img => ({
+            id: img.id,
+            url: img.webformatURL,
+            tags: img.tags,
+        })),
+    };
 
     try {
-      console.log('Buscando:', searchTerm, 'Página:', page)
-      
-      const filteredQuery = applyBiasFilters(searchTerm)
-      
-      const response = await fetch('/api/search', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ 
-          query: filteredQuery, 
-          originalQuery: searchTerm,
-          page: page,
-          per_page: 20
-        }),
-      })
+        const response = await fetch('/api/history', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(searchRecord),
+        });
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}))
-        throw new Error(errorData.error || `Error del servidor: ${response.status}`)
-      }
-
-      const data = await response.json()
-
-      if (data.success) {
-        if (isLoadMore) {
-          // Agregar nuevas imágenes a las existentes
-          setImages(prev => [...prev, ...data.images])
+        if (response.ok) {
+            console.log('✅ Búsqueda registrada en MongoDB.')
         } else {
-          // Nueva búsqueda, reemplazar imágenes
-          setImages(data.images)
-          setShowResults(true)
+            console.error('❌ Fallo al registrar búsqueda:', await response.json())
         }
-        
-        setCurrentPage(data.page)
-        setHasMore(data.hasMore)
-        setTotalResults(data.total)
-        
-        if (!isLoadMore) {
-          onSearch(searchTerm)
-        }
-      } else {
-        throw new Error(data.error || 'Error en la respuesta del servidor')
-      }
-
     } catch (error) {
-      console.error('Error en búsqueda:', error)
-      setLastError(error.message)
-    } finally {
-      setIsLoading(false)
+        console.error('❌ Error de red al intentar guardar la búsqueda:', error)
     }
-  }
+};
 
-  const handleLoadMore = async () => {
-    if (!hasMore || isLoading) return
-    await performSearch(currentSearchTerm, currentPage + 1, true)
-  }
+// =================================================================
+// 🆕 Lógica de Validación Estricta
+// =================================================================
+const checkStrictBlock = (searchQuery) => {
+    const q = searchQuery.trim().toLowerCase();
+    const words = q.split(/\s+/).filter(w => w.length > 0);
 
-  const handleSearch = async (e) => {
-    e.preventDefault()
-    await performSearch(query, 1, false)
-  }
-
-  const handleSuggestionClick = (suggestion) => {
-    setQuery(suggestion)
-    performSearch(suggestion, 1, false)
-  }
-
-  const applyBiasFilters = (searchQuery) => {
-    const originalQuery = searchQuery.toLowerCase()
-    let filteredQuery = originalQuery
-
-    if (originalQuery.includes('black') || originalQuery.includes('poor')) {
-      filteredQuery += ' landscape nature object'
-      setFilterInfo(`
-        <div class="filter-info">
-          <strong>🔒 Filtro Ético Aplicado</strong><br/>
-          Hemos ajustado tu búsqueda para evitar resultados con posibles sesgos raciales o de género.
-        </div>
-      `)
-    } else {
-      setFilterInfo(`
-        <div class="filter-info ethical">
-          <strong>✅ Búsqueda Ética Activada</strong><br/>
-          Nuestro sistema aplica filtros automáticos para evitar sesgos en los resultados.
-        </div>
-      `)
+    // Bloquea si es solo 'black', 'poor', o 'poor black' (en cualquier orden)
+    if (words.length > 0 && words.every(w => BLOCK_WORDS.includes(w))) {
+        return true;
     }
+    return false;
+};
 
-    return filteredQuery
-  }
 
-  // Componente para mostrar resultados
-  const ResultsSection = () => {
-    if (!showResults && !isLoading) {
-      return (
-        <div className="text-center py-12">
-          <div className="text-6xl mb-4 opacity-20">🔍</div>
-          <h2 className="text-2xl font-semibold text-gray-600 mb-2">
-            Realiza tu primera búsqueda
-          </h2>
-          <p className="text-gray-500">
-            Encuentra imágenes increíbles usando el buscador de arriba
-          </p>
-        </div>
-      )
-    }
+export default function ImageSearch({ onSearch }) {
+    const [query, setQuery] = useState('')
+    const [isLoading, setIsLoading] = useState(false)
+    const [filterInfo, setFilterInfo] = useState('') 
+    const [lastError, setLastError] = useState('')
+    const [images, setImages] = useState([])
+    const [currentPage, setCurrentPage] = useState(1)
+    const [hasMore, setHasMore] = useState(false)
+    const [totalResults, setTotalResults] = useState(0)
+    const [currentSearchTerm, setCurrentSearchTerm] = useState('')
+    const [showResults, setShowResults] = useState(false)
 
-    if (isLoading && images.length === 0) {
-      return (
-        <div className="text-center py-12">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-          <p className="text-gray-600">Buscando imágenes...</p>
-        </div>
-      )
-    }
+    const searchSuggestions = [
+        'nature', 'mountains', 'ocean', 'city', 'forest',
+        'animals', 'flowers', 'sky', 'beach', 'architecture'
+    ]; 
 
-    if (images.length === 0 && !isLoading) {
-      return (
-        <div className="error">
-          <div className="text-4xl mb-4">😔</div>
-          <h3 className="text-xl font-semibold mb-2">No se encontraron imágenes</h3>
-          <p className="text-gray-600">No hay resultados para "<strong>{currentSearchTerm}</strong>"</p>
-          <p className="text-sm text-gray-500 mt-2">Intenta con otros términos de búsqueda</p>
-        </div>
-      )
+    // ... (useEffect para handleSearchFromHistory) ...
+    useEffect(() => {
+        const handleSearchFromHistory = (event) => {
+            const { term } = event.detail
+            setQuery(term)
+            performSearch(term, 1)
+        }
+
+        window.addEventListener('searchFromHistory', handleSearchFromHistory)
+        return () => {
+            window.removeEventListener('searchFromHistory', handleSearchFromHistory)
+        }
+    }, []);
+
+
+    // ✅ Función para manejar los filtros y la URL
+    const applyBiasFilters = (searchQuery) => {
+        const originalQuery = searchQuery.toLowerCase();
+        
+        let extraParams = '';
+        let message = `
+            <div class="filter-info ethical">
+                <strong>✅ Búsqueda Ética por Defecto</strong><br/>
+                Imágenes de personas excluidas en todas las búsquedas.
+            </div>
+        `;
+
+        if (originalQuery.includes('black') || originalQuery.includes('poor')) {
+            // Si la búsqueda contiene una palabra de riesgo, añadimos categorías de bajo riesgo.
+            extraParams = '&category=nature,backgrounds,buildings,science,transportation,animals,objects';
+            
+            message = `
+                <div class="filter-info risky">
+                    <strong>🔒 Filtro Ético Reforzado</strong><br/>
+                    Se garantiza la exclusión de personas y se priorizan objetos y paisajes para el término "<strong>${searchQuery}</strong>".
+                </div>
+            `;
+        }
+
+        setFilterInfo(message);
+        return extraParams; 
+    };
+
+    // ✅ Función principal de búsqueda
+    const performSearch = async (searchTerm, page = 1, isLoadMore = false) => {
+        const q = searchTerm.trim();
+        
+        if (!q) {
+            setLastError('Por favor, escribe algo para buscar');
+            return;
+        }
+        
+        // 1. APLICACIÓN DEL BLOQUEO ESTRICTO
+        if (checkStrictBlock(q)) {
+            setLastError(`⛔ Búsqueda Bloqueada: El término "${q}" es muy sensible y puede inducir un sesgo. Por favor, sé más específico (Ej: "black car", "poor visibility").`);
+            setImages([]);
+            setFilterInfo('');
+            setShowResults(true);
+            return;
+        }
+
+        if (!isLoadMore) {
+            setIsLoading(true);
+            setImages([]);
+            setCurrentPage(1);
+            setCurrentSearchTerm(searchTerm);
+            setShowResults(false);
+        } else {
+            setIsLoading(true);
+        }
+
+        setLastError('');
+        
+        try {
+            const extraParams = applyBiasFilters(q); 
+            const apiKey = process.env.NEXT_PUBLIC_PIXABAY_API_KEY;
+            
+            // 2. CONSTRUCCIÓN DE LA URL
+            // Usamos &people=false y &safesearch=true para excluir personas en CUALQUIER búsqueda.
+            const response = await fetch(
+                `https://pixabay.com/api/?key=${apiKey}&q=${encodeURIComponent(q)}&image_type=photo&per_page=20&page=${page}&safesearch=true&people=false${extraParams}`
+            );
+
+            if (!response.ok) throw new Error(`Error del servidor Pixabay: ${response.status}`);
+
+            const data = await response.json();
+            let results = data.hits || [];
+
+            // 3. 🚫 Post-Filtrado Suavizado (Solo para tags obvios de persona)
+            // Se mantiene una capa de filtro para máxima seguridad, pero es mucho menos agresiva.
+            results = results.filter(img => {
+                const tags = img.tags.toLowerCase();
+                return !(
+                    tags.includes('person') ||
+                    tags.includes('people') ||
+                    tags.includes('portrait')
+                );
+            });
+
+            if (isLoadMore) {
+                setImages(prev => [...prev, ...results]);
+            } else {
+                setImages(results);
+                setShowResults(true);
+            }
+
+            setCurrentPage(page);
+            setHasMore(results.length === 20); 
+            setTotalResults(data.totalHits || 0);
+
+            if (!isLoadMore && results.length > 0) {
+                await saveSearchRecord(searchTerm, results);
+            }
+
+            if (!isLoadMore) onSearch && onSearch(searchTerm);
+        } catch (error) {
+            console.error('Error en búsqueda:', error);
+            setLastError(error.message);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    // ... (El resto de las funciones: handleLoadMore, handleSearch, handleSuggestionClick) ...
+    const handleLoadMore = async () => {
+        if (!hasMore || isLoading) return;
+        await performSearch(currentSearchTerm, currentPage + 1, true);
+    };
+
+    const handleSearch = async (e) => {
+        e.preventDefault();
+        await performSearch(query, 1, false);
+    };
+
+    const handleSuggestionClick = (suggestion) => {
+        setQuery(suggestion);
+        performSearch(suggestion, 1, false);
+    };
+
+
+    // 🖼️ Componente de resultados y return (mantener el resto del código como está)
+    const ResultsSection = () => {
+        // ... (Tu código ResultsSection) ...
+        // Código para renderizar resultados y manejo de estados (sin cambios funcionales)
+        if (!showResults && !isLoading) {
+            return (
+                <div className="text-center py-12">
+                    <div className="text-6xl mb-4 opacity-20">🔍</div>
+                    <h2 className="text-2xl font-semibold text-gray-600 mb-2">
+                        Realiza tu primera búsqueda
+                    </h2>
+                    <p className="text-gray-500">
+                        Encuentra imágenes increíbles usando el buscador de arriba
+                    </p>
+                </div>
+            )
+        }
+
+        if (isLoading && images.length === 0) {
+            return (
+                <div className="text-center py-12">
+                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+                    <p className="text-gray-600">Buscando imágenes...</p>
+                </div>
+            )
+        }
+
+        if (images.length === 0 && !isLoading) {
+            return (
+                <div className="error text-center py-12">
+                    <div className="text-4xl mb-4">😔</div>
+                    <h3 className="text-xl font-semibold mb-2">No se encontraron imágenes</h3>
+                    <p className="text-gray-600">No hay resultados para "<strong>{currentSearchTerm}</strong>"</p>
+                </div>
+            )
+        }
+
+        return (
+            <>
+                <div className="results-header text-center mb-6">
+                    <h2 className="results-title text-2xl font-semibold">
+                        🎨 Resultados para: <span className="text-blue-600">"{currentSearchTerm}"</span>
+                    </h2>
+                    <p className="results-count text-gray-600">
+                        📊 {totalResults.toLocaleString()} imágenes encontradas
+                    </p>
+                </div>
+
+                {/* Mostramos el mensaje de filtro en un div estilizado */}
+                {filterInfo && (
+                    <div 
+                        className="mb-6 p-4 rounded-lg text-sm"
+                        dangerouslySetInnerHTML={{ __html: filterInfo }} 
+                        style={{ backgroundColor: '#f0f4ff', border: '1px solid #c7d2fe' }}
+                    />
+                )}
+
+                <div className="gallery-grid grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                    {images.map((image, index) => (
+                        <div key={`${image.id}-${index}`} className="image-card group">
+                            <div className="relative overflow-hidden rounded-lg shadow-md">
+                                <img
+                                    src={image.webformatURL}
+                                    alt={image.tags || 'Imagen'}
+                                    loading={index < 20 ? 'eager' : 'lazy'}
+                                    className="w-full h-60 object-cover transition-transform duration-300 group-hover:scale-105"
+                                />
+                                <div className="absolute top-2 right-2 bg-black bg-opacity-70 text-white text-xs px-2 py-1 rounded-md">
+                                    ❤️ {image.likes || 0}
+                                </div>
+                            </div>
+                            <div className="text-sm mt-2">
+                                <p className="text-gray-700 truncate">{image.tags}</p>
+                                <p className="text-gray-500 text-xs">👤 {image.user || 'Desconocido'}</p>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+
+                {hasMore && (
+                    <LoadMoreButton
+                        onLoadMore={handleLoadMore}
+                        isLoading={isLoading}
+                        hasMore={hasMore}
+                        currentPage={currentPage}
+                        totalResults={totalResults}
+                    />
+                )}
+            </>
+        )
     }
 
     return (
-      <>
-        <div className="results-header">
-          <h2 className="results-title">
-            🎨 Resultados para: <span className="text-blue-600">"{currentSearchTerm}"</span>
-          </h2>
-          <p className="results-count">
-            📊 {totalResults.toLocaleString()} imágenes encontradas - 
-            Mostrando {images.length} resultados
-            {currentPage > 1 ? ` (Página ${currentPage})` : ''}
-          </p>
-          {hasMore && (
-            <div className="mt-2 text-sm text-green-600">
-              ⬇️ Hay más imágenes disponibles - desplázate hacia abajo para cargar más
-            </div>
-          )}
-        </div>
-        
-        {filterInfo && (
-          <div dangerouslySetInnerHTML={{ __html: filterInfo }} />
-        )}
-        
-        <div className="gallery-grid">
-          {images.map((image, index) => (
-            <div key={`${image.id}-${index}`} className="image-card group">
-              <div className="relative overflow-hidden">
-                <img 
-                  src={image.webformatURL} 
-                  alt={image.tags || 'Imagen'}
-                  loading={index < 20 ? 'eager' : 'lazy'}
-                  className="w-full h-64 object-cover transition-transform duration-300 group-hover:scale-105"
-                  onError={(e) => {
-                    e.target.src = 'https://via.placeholder.com/400x300/4A5568/FFFFFF?text=Error+Loading'
-                  }}
-                />
-                <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-20 transition-all duration-300"></div>
-                <div className="absolute top-3 right-3 bg-black bg-opacity-70 text-white px-2 py-1 rounded-lg text-xs">
-                  {image.likes || 0} ❤️
-                </div>
-              </div>
-              <div className="image-info">
-                <div className="image-tags">
-                  {(image.tags || 'imagen').split(',').slice(0, 3).join(', ')}
-                </div>
-                <div className="flex justify-between items-center mt-2">
-                  <span className="image-user text-sm">👤 {image.user || 'Unknown'}</span>
-                  <span className="text-xs text-gray-500">
-                    {image.downloads || 0} ⬇️
-                  </span>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
+        // ... (Tu código de retorno del componente ImageSearch) ...
+        <>
+            <div className="search-container text-center p-6">
+                <h2 className="text-2xl font-bold mb-4">🔍 Buscador de Imágenes Éticas</h2>
 
-        {hasMore && (
-          <LoadMoreButton
-            onLoadMore={handleLoadMore}
-            isLoading={isLoading}
-            hasMore={hasMore}
-            currentPage={currentPage}
-            totalResults={totalResults}
-          />
-        )}
-      </>
+                {lastError && (
+                    <div className="mb-4 p-3 border border-red-300 bg-red-50 text-red-700 rounded-md">
+                        ❌ {lastError}
+                    </div>
+                )}
+
+                <form onSubmit={handleSearch} className="flex justify-center mb-4 gap-2">
+                    <input
+                        type="text"
+                        value={query}
+                        onChange={(e) => setQuery(e.target.value)}
+                        placeholder="Ej: animales, paisajes, ciudades..."
+                        className="border border-gray-400 px-4 py-2 rounded-lg w-72"
+                    />
+                    <button
+                        type="submit"
+                        disabled={isLoading || !query.trim()}
+                        className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                    >
+                        {isLoading ? 'Buscando...' : 'Buscar'}
+                    </button>
+                </form>
+
+                <div className="search-suggestions flex flex-wrap justify-center gap-2">
+                    {searchSuggestions.map((s) => (
+                        <button
+                            key={s}
+                            onClick={() => handleSuggestionClick(s)}
+                            className="text-sm px-3 py-1 bg-gray-200 hover:bg-gray-300 rounded-full"
+                            disabled={isLoading}
+                        >
+                            {s}
+                        </button>
+                    ))}
+                </div>
+            </div>
+
+            <div id="results-section" className="px-4">
+                <ResultsSection />
+            </div>
+        </>
     )
-  }
-
-  return (
-    <>
-      <div className="search-container">
-        <h2 className="search-title">
-          🔍 Buscador de Imágenes Éticas
-        </h2>
-        
-        {lastError && (
-          <div className="filter-info" style={{background: '#fef2f2', borderColor: '#fecaca', color: '#dc2626'}}>
-            <strong>❌ Último error:</strong> {lastError}
-          </div>
-        )}
-        
-        <form onSubmit={handleSearch} className="search-form">
-          <input
-            type="text"
-            id="search-input"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Escribe lo que quieres buscar... (ej: paisajes, animales, ciudades)"
-            className="search-input"
-            disabled={isLoading}
-          />
-          <button
-            type="submit"
-            disabled={isLoading || !query.trim()}
-            className={`search-button ${isLoading ? 'loading' : ''}`}
-          >
-            {isLoading ? 'Buscando...' : '🚀 Buscar'}
-          </button>
-        </form>
-
-        <div className="search-suggestions">
-          <span className="text-sm text-gray-500 mr-2">💡 Sugerencias:</span>
-          {searchSuggestions.map((suggestion) => (
-            <button
-              key={suggestion}
-              type="button"
-              className="suggestion-tag"
-              onClick={() => handleSuggestionClick(suggestion)}
-              disabled={isLoading}
-            >
-              {suggestion}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Sección de resultados */}
-      <div id="results-section">
-        <ResultsSection />
-      </div>
-    </>
-  )
 }
